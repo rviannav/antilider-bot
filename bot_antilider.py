@@ -9,7 +9,7 @@
 Funcionalidades:
   • /start  → Menu com seleção de livros disponíveis
   • /grupos → Lista de grupos públicos sobre liderança
-  • Geração de link de pagamento via Checkout Pro (R$ 32,00 cada)
+  • Geração de link de pagamento via Checkout Pro
   • Webhook para confirmação de pagamento
   • Envio automático do PDF após pagamento aprovado
 
@@ -55,14 +55,25 @@ BOOKS = {
         "description": "E-book Anti-Líder — Transforme sua visão sobre liderança",
         "pdf_filename": "antilider.pdf",
         "emoji": "📖",
+        "subtitle": "Português",
     },
-    "omf": {
+    "omf_pt": {
         "title": "OMF (Over a Why Me?)",
         "price": 32.00,
         "currency": "BRL",
         "description": "E-book OMF — Descobra seu propósito",
         "pdf_filename": "omf.pdf",
         "emoji": "🌟",
+        "subtitle": "Português",
+    },
+    "omf_en": {
+        "title": "OMF — Over Frame Maturity Framework",
+        "price": 84.00,
+        "currency": "BRL",
+        "description": "E-book OMF — Over Frame Maturity Framework (English)",
+        "pdf_filename": "omf_english.pdf",
+        "emoji": "🌍",
+        "subtitle": "English ($14.00 USD)",
     },
 }
 
@@ -107,16 +118,16 @@ telegram_app: Application | None = None
 WELCOME_TEXT = (
     "📚 *Bem\\-vindo à nossa livraria digital\\!*\n\n"
     "Escolha um dos nossos livros disponíveis abaixo:\n\n"
-    "🔹 *Anti\\-Líder* — Transforme sua visão sobre liderança\\.\n"
-    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descobra seu propósito\\.\n\n"
-    "💰 *Ambos por R\\$ 32,00* \\(PIX ou Cartão\\)\n\n"
+    "🔹 *Anti\\-Líder* — Transforme sua visão sobre liderança \\(Português\\)\n"
+    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descobra seu propósito \\(Português\\)\n"
+    "🔹 *OMF — Over Frame Maturity Framework* — English \\($14\\.00 USD / R\\$ 84,00\\)\n\n"
     "Clique em um dos botões abaixo para começar\\!"
 )
 
 PAYMENT_GENERATED_TEXT = (
     "✅ *Link de pagamento gerado com sucesso\\!*\n\n"
-    "Clique no botão abaixo para realizar o pagamento de "
-    "*R\\$ 32,00* via PIX ou cartão de crédito/débito\\.\n\n"
+    "Clique no botão abaixo para realizar o pagamento "
+    "via PIX ou cartão de crédito/débito\\.\n\n"
     "Após a confirmação do pagamento, o PDF será "
     "enviado automaticamente aqui no chat\\. 📩"
 )
@@ -161,8 +172,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ],
             [
                 InlineKeyboardButton(
-                    f"{BOOKS['omf']['emoji']} OMF — R$ 32,00",
-                    callback_data="select_book|omf",
+                    f"{BOOKS['omf_pt']['emoji']} OMF (Português) — R$ 32,00",
+                    callback_data="select_book|omf_pt",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{BOOKS['omf_en']['emoji']} OMF (English) — R$ 84,00",
+                    callback_data="select_book|omf_en",
                 ),
             ],
         ]
@@ -194,13 +211,17 @@ async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     book = BOOKS[book_id]
+    price_display = f"R\\$ {book['price']:.2f}"
+    if book_id == "omf_en":
+        price_display = f"R\\$ {book['price']:.2f} \\($14\\.00 USD\\)"
+
     await query.message.reply_text(
         f"📖 Você selecionou: *{book['title']}*\n\n"
-        f"Preço: R\\$ {book['price']:.2f}\n\n"
+        f"Preço: {price_display}\n\n"
         "Clique no botão abaixo para prosseguir com o pagamento\\.",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("💳 Pagar R$ 32,00", callback_data=f"comprar|{book_id}")]]
+            [[InlineKeyboardButton(f"💳 Pagar {price_display}", callback_data=f"comprar|{book_id}")]]
         ),
     )
 
@@ -276,9 +297,13 @@ async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             chat_id,
         )
 
+        price_display = f"R\\$ {book['price']:.2f}"
+        if book_id == "omf_en":
+            price_display = f"R\\$ {book['price']:.2f}"
+
         keyboard = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("💳 Pagar R$ 32,00", url=checkout_url)],
+                [InlineKeyboardButton(f"💳 Pagar {price_display}", url=checkout_url)],
                 [InlineKeyboardButton("🔄 Já paguei — verificar", callback_data=f"verificar|{external_ref}")],
             ]
         )
@@ -547,7 +572,7 @@ def main():
 
     logger.info("✅ Todos os PDFs encontrados:")
     for book_id, book in BOOKS.items():
-        logger.info("   • %s (%s)", book["title"], book["pdf_filename"])
+        logger.info("   • %s (%s) — R$ %.2f", book["title"], book["pdf_filename"], book["price"])
 
     # Inicia o servidor webhook em uma thread separada
     if WEBHOOK_BASE_URL:
