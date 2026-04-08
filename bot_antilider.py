@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================
-  BOT DE VENDAS — LIVRO "ANTI-LÍDER"
+  BOT DE VENDAS — MÚLTIPLOS LIVROS
   Telegram + Mercado Pago Checkout Pro
 =============================================================
 
 Funcionalidades:
-  • /start  → Apresentação do livro + botão "Comprar agora"
+  • /start  → Menu com seleção de livros disponíveis
   • /grupos → Lista de grupos públicos sobre liderança
-  • Geração de link de pagamento via Checkout Pro (R$ 32,00)
+  • Geração de link de pagamento via Checkout Pro (R$ 32,00 cada)
   • Webhook para confirmação de pagamento
   • Envio automático do PDF após pagamento aprovado
 
@@ -46,10 +46,25 @@ from urllib.parse import urlparse, parse_qs
 TELEGRAM_TOKEN = "8738278665:AAHlFTsZfaVMqDPyLByiNB_EG6EBIhGD20Q"
 MERCADOPAGO_ACCESS_TOKEN = "APP_USR-4583982947872694-040719-2434778fb7385091dd755d15f4f67106-3322210976"
 
-BOOK_TITLE = "Anti-Líder"
-BOOK_PRICE = 32.00
-BOOK_CURRENCY = "BRL"
-BOOK_PDF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "antilider.pdf")
+# Catálogo de livros
+BOOKS = {
+    "antilider": {
+        "title": "Anti-Líder",
+        "price": 32.00,
+        "currency": "BRL",
+        "description": "E-book Anti-Líder — Transforme sua visão sobre liderança",
+        "pdf_filename": "antilider.pdf",
+        "emoji": "📖",
+    },
+    "omf": {
+        "title": "OMF (Over a Why Me?)",
+        "price": 32.00,
+        "currency": "BRL",
+        "description": "E-book OMF — Descobra seu propósito",
+        "pdf_filename": "omf.pdf",
+        "emoji": "🌟",
+    },
+}
 
 # Porta do servidor webhook para receber notificações do Mercado Pago
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", 8443))
@@ -76,11 +91,11 @@ mp_sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 # ─────────────────────────────────────────────
 # ARMAZENAMENTO EM MEMÓRIA
-# Mapeia external_reference → chat_id do comprador
+# Mapeia external_reference → (chat_id, book_id)
 # Em produção, use um banco de dados.
 # ─────────────────────────────────────────────
 
-pending_payments: dict[str, int] = {}
+pending_payments: dict[str, tuple[int, str]] = {}
 
 # Referência global ao Application do Telegram (preenchida em main)
 telegram_app: Application | None = None
@@ -90,36 +105,33 @@ telegram_app: Application | None = None
 # ─────────────────────────────────────────────
 
 WELCOME_TEXT = (
-    "📖 *Anti\\-Líder — Transforme sua visão sobre liderança\\!*\n\n"
-    "Você está prestes a descobrir por que os melhores líderes "
-    "quebram todas as regras tradicionais\\.\n\n"
-    "🔹 *O que você vai encontrar no livro:*\n"
-    "• Uma abordagem revolucionária sobre gestão de pessoas\n"
-    "• Estratégias práticas para liderar com autenticidade\n"
-    "• Casos reais de líderes que transformaram suas equipes\n\n"
-    "💰 *Valor: R\\$ 32,00* \\(PIX ou Cartão\\)\n\n"
-    "Clique no botão abaixo para garantir o seu\\!"
+    "📚 *Bem\\-vindo à nossa livraria digital\\!*\n\n"
+    "Escolha um dos nossos livros disponíveis abaixo:\n\n"
+    "🔹 *Anti\\-Líder* — Transforme sua visão sobre liderança\\.\n"
+    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descobra seu propósito\\.\n\n"
+    "💰 *Ambos por R\\$ 32,00* \\(PIX ou Cartão\\)\n\n"
+    "Clique em um dos botões abaixo para começar\\!"
 )
 
 PAYMENT_GENERATED_TEXT = (
     "✅ *Link de pagamento gerado com sucesso\\!*\n\n"
     "Clique no botão abaixo para realizar o pagamento de "
     "*R\\$ 32,00* via PIX ou cartão de crédito/débito\\.\n\n"
-    "Após a confirmação do pagamento, o PDF do livro "
-    "*Anti\\-Líder* será enviado automaticamente aqui no chat\\. 📩"
+    "Após a confirmação do pagamento, o PDF será "
+    "enviado automaticamente aqui no chat\\. 📩"
 )
 
-PAYMENT_APPROVED_TEXT = (
+PAYMENT_APPROVED_TEXT_TEMPLATE = (
     "🎉 *Pagamento confirmado\\!*\n\n"
     "Muito obrigado pela sua compra\\! Aqui está o seu exemplar "
-    "digital do livro *Anti\\-Líder*\\.\n\n"
+    "digital de *{book_title}*\\.\n\n"
     "Boa leitura\\! 📚"
 )
 
 GROUPS_TEXT = (
     "👥 *Grupos Públicos sobre Liderança, Gestão e Negócios*\n\n"
     "Abaixo estão alguns grupos do Telegram onde você pode "
-    "interagir com outros profissionais e divulgar o bot:\n\n"
+    "interagir com outros profissionais e divulgar nossos livros:\n\n"
     "1\\. [Liderança e Gestão Brasil](https://t.me/liderancaegestao)\n"
     "2\\. [Empreendedores Digitais](https://t.me/empreendedoresdigitais)\n"
     "3\\. [Marketing e Negócios](https://t.me/marketingenegocios)\n"
@@ -129,7 +141,7 @@ GROUPS_TEXT = (
     "7\\. [Líderes do Futuro](https://t.me/lideresdofuturobr)\n"
     "8\\. [Negócios e Finanças](https://t.me/negociosefinancas)\n\n"
     "💡 _Dica: compartilhe o link @Rviannavbot nos grupos "
-    "para que mais pessoas conheçam o livro\\!_"
+    "para que mais pessoas conheçam nossos livros\\!_"
 )
 
 # ─────────────────────────────────────────────
@@ -138,9 +150,22 @@ GROUPS_TEXT = (
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Apresenta o livro e exibe o botão de compra."""
+    """Apresenta o menu de livros disponíveis."""
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🛒 Comprar agora — R$ 32,00", callback_data="comprar")]]
+        [
+            [
+                InlineKeyboardButton(
+                    f"{BOOKS['antilider']['emoji']} Anti-Líder — R$ 32,00",
+                    callback_data="select_book|antilider",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{BOOKS['omf']['emoji']} OMF — R$ 32,00",
+                    callback_data="select_book|omf",
+                ),
+            ],
+        ]
     )
     await update.message.reply_text(
         WELCOME_TEXT,
@@ -154,26 +179,62 @@ async def cmd_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(GROUPS_TEXT, parse_mode="MarkdownV2", disable_web_page_preview=True)
 
 
+async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usuário seleciona um livro."""
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split("|", 1)
+    if len(data_parts) < 2:
+        return
+
+    book_id = data_parts[1]
+    if book_id not in BOOKS:
+        await query.message.reply_text("❌ Livro não encontrado.")
+        return
+
+    book = BOOKS[book_id]
+    await query.message.reply_text(
+        f"📖 Você selecionou: *{book['title']}*\n\n"
+        f"Preço: R\\$ {book['price']:.2f}\n\n"
+        "Clique no botão abaixo para prosseguir com o pagamento\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("💳 Pagar R$ 32,00", callback_data=f"comprar|{book_id}")]]
+        ),
+    )
+
+
 async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gera o link de pagamento do Mercado Pago Checkout Pro."""
     query = update.callback_query
     await query.answer()
 
-    chat_id = query.message.chat_id
-    external_ref = f"antilider-{chat_id}-{uuid.uuid4().hex[:8]}"
+    data_parts = query.data.split("|", 1)
+    if len(data_parts) < 2:
+        return
 
-    # Armazena a referência para vincular o pagamento ao chat
-    pending_payments[external_ref] = chat_id
+    book_id = data_parts[1]
+    if book_id not in BOOKS:
+        await query.message.reply_text("❌ Livro não encontrado.")
+        return
+
+    book = BOOKS[book_id]
+    chat_id = query.message.chat_id
+    external_ref = f"{book_id}-{chat_id}-{uuid.uuid4().hex[:8]}"
+
+    # Armazena a referência para vincular o pagamento ao chat e livro
+    pending_payments[external_ref] = (chat_id, book_id)
 
     # Monta a preferência de pagamento
     preference_data = {
         "items": [
             {
-                "title": f"Livro {BOOK_TITLE}",
+                "title": book["title"],
                 "quantity": 1,
-                "unit_price": BOOK_PRICE,
-                "currency_id": BOOK_CURRENCY,
-                "description": "E-book Anti-Líder — Versão digital (PDF)",
+                "unit_price": book["price"],
+                "currency_id": book["currency"],
+                "description": book["description"],
             }
         ],
         "external_reference": external_ref,
@@ -186,7 +247,7 @@ async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "pending": "https://t.me/Rviannavbot",
         },
         "auto_return": "approved",
-        "statement_descriptor": "ANTILIDER",
+        "statement_descriptor": book["title"][:20].upper(),
     }
 
     # Adiciona notification_url se WEBHOOK_BASE_URL estiver configurada
@@ -208,9 +269,10 @@ async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         logger.info(
-            "Preferência criada — ID: %s | Ref: %s | Chat: %s",
+            "Preferência criada — ID: %s | Ref: %s | Livro: %s | Chat: %s",
             preference.get("id"),
             external_ref,
+            book_id,
             chat_id,
         )
 
@@ -254,8 +316,9 @@ async def callback_verificar(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         approved = any(p.get("status") == "approved" for p in results)
 
-        if approved:
-            await send_book(chat_id, context)
+        if approved and external_ref in pending_payments:
+            chat_id_stored, book_id = pending_payments.pop(external_ref)
+            await send_book(chat_id_stored, book_id, context)
         else:
             await query.message.reply_text(
                 "⏳ *Pagamento ainda não confirmado\\.*\n\n"
@@ -273,46 +336,72 @@ async def callback_verificar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-async def send_book(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def send_book(chat_id: int, book_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia o PDF do livro para o comprador."""
+    if book_id not in BOOKS:
+        logger.error("Livro não encontrado: %s", book_id)
+        return
+
+    book = BOOKS[book_id]
+    pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
+
     try:
-        with open(BOOK_PDF_PATH, "rb") as pdf_file:
+        with open(pdf_path, "rb") as pdf_file:
+            payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=PAYMENT_APPROVED_TEXT,
+                text=payment_text,
                 parse_mode="MarkdownV2",
             )
             await context.bot.send_document(
                 chat_id=chat_id,
                 document=pdf_file,
-                filename=f"{BOOK_TITLE}.pdf",
-                caption="📖 Anti-Líder — Seu exemplar digital",
+                filename=f"{book['title']}.pdf",
+                caption=f"📖 {book['title']} — Seu exemplar digital",
             )
-        logger.info("Livro enviado com sucesso para chat_id=%s", chat_id)
+        logger.info("Livro %s enviado com sucesso para chat_id=%s", book_id, chat_id)
+    except FileNotFoundError:
+        logger.error("Arquivo PDF não encontrado: %s", pdf_path)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Desculpe, houve um erro ao enviar o livro. "
+                 f"Por favor, entre em contato com o suporte.",
+        )
     except Exception as exc:
         logger.exception("Erro ao enviar o livro para chat_id=%s", chat_id)
 
 
-async def send_book_via_app(chat_id: int) -> None:
+async def send_book_via_app(chat_id: int, book_id: str) -> None:
     """Envia o livro usando a instância global do Application (chamado pelo webhook)."""
     if telegram_app is None:
         logger.error("Application do Telegram não inicializado.")
         return
+
+    if book_id not in BOOKS:
+        logger.error("Livro não encontrado: %s", book_id)
+        return
+
+    book = BOOKS[book_id]
+    pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
+
     try:
         bot = telegram_app.bot
-        with open(BOOK_PDF_PATH, "rb") as pdf_file:
+        payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
+        with open(pdf_path, "rb") as pdf_file:
             await bot.send_message(
                 chat_id=chat_id,
-                text=PAYMENT_APPROVED_TEXT,
+                text=payment_text,
                 parse_mode="MarkdownV2",
             )
             await bot.send_document(
                 chat_id=chat_id,
                 document=pdf_file,
-                filename=f"{BOOK_TITLE}.pdf",
-                caption="📖 Anti-Líder — Seu exemplar digital",
+                filename=f"{book['title']}.pdf",
+                caption=f"📖 {book['title']} — Seu exemplar digital",
             )
-        logger.info("Livro enviado via webhook para chat_id=%s", chat_id)
+        logger.info("Livro %s enviado via webhook para chat_id=%s", book_id, chat_id)
+    except FileNotFoundError:
+        logger.error("Arquivo PDF não encontrado: %s", pdf_path)
     except Exception as exc:
         logger.exception("Erro ao enviar livro via webhook para chat_id=%s", chat_id)
 
@@ -327,7 +416,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     data = query.data
 
-    if data == "comprar":
+    if data.startswith("select_book|"):
+        await callback_select_book(update, context)
+    elif data.startswith("comprar|"):
         await callback_comprar(update, context)
     elif data.startswith("verificar|"):
         await callback_verificar(update, context)
@@ -346,7 +437,7 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot Anti-Lider Webhook OK")
+        self.wfile.write(b"Bot Multi-Livros Webhook OK")
 
     def do_POST(self):
         """Processa notificações de pagamento do Mercado Pago."""
@@ -405,16 +496,17 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
                 approved = status == "approved"
 
             if approved and external_ref in pending_payments:
-                chat_id = pending_payments.pop(external_ref)
+                chat_id, book_id = pending_payments.pop(external_ref)
                 logger.info(
-                    "Pagamento aprovado — Ref: %s | Chat: %s",
+                    "Pagamento aprovado — Ref: %s | Livro: %s | Chat: %s",
                     external_ref,
+                    book_id,
                     chat_id,
                 )
                 # Envia o livro de forma assíncrona
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(send_book_via_app(chat_id))
+                loop.run_until_complete(send_book_via_app(chat_id, book_id))
                 loop.close()
 
         except Exception as exc:
@@ -442,16 +534,20 @@ def main():
     global telegram_app
 
     logger.info("=" * 50)
-    logger.info("  BOT ANTI-LÍDER — Iniciando...")
+    logger.info("  BOT MULTI-LIVROS — Iniciando...")
     logger.info("=" * 50)
 
-    # Verifica se o PDF existe
-    if not Path(BOOK_PDF_PATH).is_file():
-        logger.error("ERRO: Arquivo PDF não encontrado em %s", BOOK_PDF_PATH)
-        logger.error("Coloque o arquivo 'antilider.pdf' na mesma pasta do bot.")
-        return
+    # Verifica se todos os PDFs existem
+    for book_id, book in BOOKS.items():
+        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
+        if not Path(pdf_path).is_file():
+            logger.error("ERRO: Arquivo PDF não encontrado em %s", pdf_path)
+            logger.error("Coloque o arquivo '%s' na mesma pasta do bot.", book["pdf_filename"])
+            return
 
-    logger.info("PDF encontrado: %s", BOOK_PDF_PATH)
+    logger.info("✅ Todos os PDFs encontrados:")
+    for book_id, book in BOOKS.items():
+        logger.info("   • %s (%s)", book["title"], book["pdf_filename"])
 
     # Inicia o servidor webhook em uma thread separada
     if WEBHOOK_BASE_URL:
