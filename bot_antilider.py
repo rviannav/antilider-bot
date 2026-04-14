@@ -46,6 +46,13 @@ from urllib.parse import urlparse, parse_qs
 TELEGRAM_TOKEN = "8738278665:AAHlFTsZfaVMqDPyLByiNB_EG6EBIhGD20Q"
 MERCADOPAGO_ACCESS_TOKEN = "APP_USR-4583982947872694-040719-2434778fb7385091dd755d15f4f67106-3322210976"
 
+# URLs da Amazon (configuráveis via variáveis de ambiente)
+# Defina AMAZON_URL_ANTILIDER, AMAZON_URL_OMF_PT e AMAZON_URL_OMF_EN no ambiente
+# para ativar os botões "Ver na Amazon" e o comando /amazon
+AMAZON_URL_ANTILIDER = os.environ.get("AMAZON_URL_ANTILIDER", "")
+AMAZON_URL_OMF_PT    = os.environ.get("AMAZON_URL_OMF_PT", "")
+AMAZON_URL_OMF_EN    = os.environ.get("AMAZON_URL_OMF_EN", "")
+
 # Catálogo de livros
 BOOKS = {
     "antilider": {
@@ -56,6 +63,7 @@ BOOKS = {
         "pdf_filename": "antilider.pdf",
         "emoji": "📖",
         "subtitle": "Português",
+        "amazon_url": AMAZON_URL_ANTILIDER,
     },
     "omf_pt": {
         "title": "OMF (Over a Why Me?)",
@@ -65,6 +73,7 @@ BOOKS = {
         "pdf_filename": "omf.pdf",
         "emoji": "🌟",
         "subtitle": "Português",
+        "amazon_url": AMAZON_URL_OMF_PT,
     },
     "omf_en": {
         "title": "OMF — Over Frame Maturity Framework",
@@ -74,6 +83,7 @@ BOOKS = {
         "pdf_filename": "omf_english.pdf",
         "emoji": "🌍",
         "subtitle": "English ($14.00 USD)",
+        "amazon_url": AMAZON_URL_OMF_EN,
     },
 }
 
@@ -155,6 +165,38 @@ GROUPS_TEXT = (
     "para que mais pessoas conheçam nossos livros\\!_"
 )
 
+AMAZON_STRATEGY_TEXT = (
+    "🛒 *Estratégia de Vendas na Amazon — KDP*\n\n"
+    "Veja abaixo as principais práticas para maximizar as vendas "
+    "dos seus livros na Amazon Kindle Direct Publishing \\(KDP\\):\n\n"
+    "📝 *1\\. Título e Subtítulo com Palavras\\-Chave*\n"
+    "Use termos que seu público pesquisa \\(ex: liderança, autoconhecimento, "
+    "gestão\\) no título e subtítulo para aparecer nas buscas orgânicas\\.\n\n"
+    "🖼 *2\\. Capa Profissional*\n"
+    "A capa é o primeiro impacto\\. Invista em design que se destaque "
+    "nas miniaturas da Amazon\\.\n\n"
+    "⭐ *3\\. Avaliações \\(Reviews\\)*\n"
+    "Peça para leitores avaliarem seu livro após a compra\\. "
+    "Avaliações aumentam a credibilidade e o rankeamento\\.\n\n"
+    "📣 *4\\. Amazon Ads \\(KDP Ads\\)*\n"
+    "Crie campanhas de anúncios patrocinados dentro da própria Amazon "
+    "com palavras\\-chave relacionadas ao seu nicho\\.\n\n"
+    "🆓 *5\\. Kindle Select / KDP Select*\n"
+    "Ao entrar no programa KDP Select, você pode oferecer dias gratuitos "
+    "e participar do Kindle Unlimited, ampliando o alcance\\.\n\n"
+    "📊 *6\\. Precificação Estratégica*\n"
+    "Teste diferentes preços \\(promoções temporárias a R\\$9,90 geram "
+    "volume e reviews; preço cheio sustenta margem\\)\\.\n\n"
+    "🌐 *7\\. Tráfego Externo*\n"
+    "Direcione seguidores das redes sociais, grupos do Telegram e e\\-mail "
+    "marketing para a página do livro na Amazon\\.\n\n"
+    "🔁 *8\\. Série de Livros*\n"
+    "Livros em série têm desempenho superior: quem compra o primeiro "
+    "tende a comprar os seguintes\\.\n\n"
+    "─────────────────────────\n"
+    "📚 *Nossos Livros na Amazon:*"
+)
+
 # ─────────────────────────────────────────────
 # HANDLERS DO TELEGRAM
 # ─────────────────────────────────────────────
@@ -196,6 +238,39 @@ async def cmd_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(GROUPS_TEXT, parse_mode="MarkdownV2", disable_web_page_preview=True)
 
 
+async def cmd_amazon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Exibe a estratégia de vendas na Amazon com links para cada livro."""
+    buttons = []
+    for book_id, book in BOOKS.items():
+        url = book.get("amazon_url", "")
+        if url:
+            buttons.append(
+                [InlineKeyboardButton(
+                    f"{book['emoji']} {book['title']} — Amazon",
+                    url=url,
+                )]
+            )
+
+    keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+
+    suffix = (
+        "\n\nClique nos botões abaixo para acessar as páginas na Amazon\\."
+        if buttons
+        else (
+            "\n\n_Os links da Amazon ainda não foram configurados\\. "
+            "Configure as variáveis de ambiente `AMAZON_URL_ANTILIDER`, "
+            "`AMAZON_URL_OMF_PT` e `AMAZON_URL_OMF_EN` para ativá\\-los\\._"
+        )
+    )
+
+    await update.message.reply_text(
+        AMAZON_STRATEGY_TEXT + suffix,
+        parse_mode="MarkdownV2",
+        disable_web_page_preview=True,
+        reply_markup=keyboard,
+    )
+
+
 async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Usuário seleciona um livro."""
     query = update.callback_query
@@ -215,14 +290,18 @@ async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYP
     if book_id == "omf_en":
         price_display = f"R\\$ {book['price']:.2f} \\($14\\.00 USD\\)"
 
+    pay_row = [InlineKeyboardButton(f"💳 Pagar {price_display}", callback_data=f"comprar|{book_id}")]
+    amazon_url = book.get("amazon_url", "")
+    rows = [pay_row]
+    if amazon_url:
+        rows.append([InlineKeyboardButton("🛒 Ver na Amazon", url=amazon_url)])
+
     await query.message.reply_text(
         f"📖 Você selecionou: *{book['title']}*\n\n"
         f"Preço: {price_display}\n\n"
         "Clique no botão abaixo para prosseguir com o pagamento\\.",
         parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f"💳 Pagar {price_display}", callback_data=f"comprar|{book_id}")]]
-        ),
+        reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
@@ -596,6 +675,7 @@ def main():
     # Registra os handlers
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("grupos", cmd_grupos))
+    telegram_app.add_handler(CommandHandler("amazon", cmd_amazon))
     telegram_app.add_handler(CallbackQueryHandler(callback_router))
 
     # Inicia o polling
