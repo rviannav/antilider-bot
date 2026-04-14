@@ -43,8 +43,8 @@ from urllib.parse import urlparse, parse_qs
 # CONFIGURAÇÕES
 # ─────────────────────────────────────────────
 
-TELEGRAM_TOKEN = "8738278665:AAHlFTsZfaVMqDPyLByiNB_EG6EBIhGD20Q"
-MERCADOPAGO_ACCESS_TOKEN = "APP_USR-4583982947872694-040719-2434778fb7385091dd755d15f4f67106-3322210976"
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+MERCADOPAGO_ACCESS_TOKEN = os.environ["MERCADOPAGO_ACCESS_TOKEN"]
 
 # URLs da Amazon (configuráveis via variáveis de ambiente)
 # Defina AMAZON_URL_ANTILIDER, AMAZON_URL_OMF_PT e AMAZON_URL_OMF_EN no ambiente
