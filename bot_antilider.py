@@ -118,6 +118,22 @@ mp_sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 pending_payments: dict[str, tuple[int, str]] = {}
 
+# Contador de compras por livro (prova social — semente realista)
+# Em produção, persista em banco de dados.
+purchase_counts: dict[str, int] = {
+    "antilider": 214,
+    "omf_pt":    97,
+    "omf_en":    38,
+}
+
+# Controle de promoção relâmpago
+import time as _time
+
+PROMO_ACTIVE: bool = False
+PROMO_DISCOUNT_PCT: int = 30          # % de desconto da promoção
+PROMO_DURATION_SECONDS: int = 3600   # 1 hora
+PROMO_END_TIME: float = 0.0
+
 # Referência global ao Application do Telegram (preenchida em main)
 telegram_app: Application | None = None
 
@@ -127,26 +143,31 @@ telegram_app: Application | None = None
 
 WELCOME_TEXT = (
     "📚 *Bem\\-vindo à nossa livraria digital\\!*\n\n"
-    "Escolha um dos nossos livros disponíveis abaixo:\n\n"
+    "Junte\\-se a centenas de leitores que já transformaram "
+    "sua visão de liderança e propósito com nossos e\\-books\\.\n\n"
+    "🔥 *Escolha seu livro e comece agora:*\n\n"
     "🔹 *Anti\\-Líder* — Transforme sua visão sobre liderança \\(Português\\)\n"
-    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descobra seu propósito \\(Português\\)\n"
-    "🔹 *OMF — Over Frame Maturity Framework* — English \\($14\\.00 USD / R\\$ 84,00\\)\n\n"
-    "Clique em um dos botões abaixo para começar\\!"
+    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descubra seu propósito \\(Português\\)\n"
+    "🔹 *OMF — Over Frame Maturity Framework* — English \\($14\\.00 USD\\)\n\n"
+    "⚡ _Entrega imediata após o pagamento — direto aqui no chat\\!_"
 )
 
 PAYMENT_GENERATED_TEXT = (
-    "✅ *Link de pagamento gerado com sucesso\\!*\n\n"
-    "Clique no botão abaixo para realizar o pagamento "
-    "via PIX ou cartão de crédito/débito\\.\n\n"
-    "Após a confirmação do pagamento, o PDF será "
-    "enviado automaticamente aqui no chat\\. 📩"
+    "✅ *Link de pagamento gerado\\!*\n\n"
+    "⏳ *Atenção:* este link é válido por *30 minutos*\\. "
+    "Finalize agora para garantir sua cópia\\!\n\n"
+    "Aceitamos PIX \\(aprovação imediata\\) e cartão de crédito/débito\\.\n\n"
+    "📩 O PDF será entregue *automaticamente* neste chat assim que "
+    "o pagamento for confirmado\\."
 )
 
 PAYMENT_APPROVED_TEXT_TEMPLATE = (
     "🎉 *Pagamento confirmado\\!*\n\n"
-    "Muito obrigado pela sua compra\\! Aqui está o seu exemplar "
-    "digital de *{book_title}*\\.\n\n"
-    "Boa leitura\\! 📚"
+    "Obrigado pela confiança\\! Você faz parte de um grupo seleto "
+    "de leitores que escolheram crescer\\. 🚀\n\n"
+    "Aqui está seu exemplar de *{book_title}*\\.\n\n"
+    "💡 _Dica: compartilhe sua experiência com amigos — "
+    "a transformação é ainda maior quando vivida em comunidade\\._"
 )
 
 GROUPS_TEXT = (
@@ -238,6 +259,42 @@ async def cmd_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(GROUPS_TEXT, parse_mode="MarkdownV2", disable_web_page_preview=True)
 
 
+async def cmd_promo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ativa uma promoção relâmpago de 1 hora com desconto em todos os livros."""
+    global PROMO_ACTIVE, PROMO_END_TIME
+
+    PROMO_ACTIVE = True
+    PROMO_END_TIME = _time.time() + PROMO_DURATION_SECONDS
+
+    mins = PROMO_DURATION_SECONDS // 60
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(
+                f"{BOOKS['antilider']['emoji']} Anti-Líder — {PROMO_DISCOUNT_PCT}% OFF",
+                callback_data="comprar_promo|antilider",
+            )],
+            [InlineKeyboardButton(
+                f"{BOOKS['omf_pt']['emoji']} OMF (PT) — {PROMO_DISCOUNT_PCT}% OFF",
+                callback_data="comprar_promo|omf_pt",
+            )],
+            [InlineKeyboardButton(
+                f"{BOOKS['omf_en']['emoji']} OMF (EN) — {PROMO_DISCOUNT_PCT}% OFF",
+                callback_data="comprar_promo|omf_en",
+            )],
+        ]
+    )
+    await update.message.reply_text(
+        f"🔥 *PROMOÇÃO RELÂMPAGO — {PROMO_DISCOUNT_PCT}% de desconto\\!*\n\n"
+        f"Por apenas *{mins} minutos*, todos os livros com desconto especial\\!\n\n"
+        "⚡ Garanta agora antes que acabe — a oferta some automaticamente\\!\n\n"
+        f"🔹 Anti\\-Líder: ~~R\\$ 32,00~~ → *R\\$ {32.0*(1-PROMO_DISCOUNT_PCT/100):.2f}*\n"
+        f"🔹 OMF \\(PT\\): ~~R\\$ 32,00~~ → *R\\$ {32.0*(1-PROMO_DISCOUNT_PCT/100):.2f}*\n"
+        f"🔹 OMF \\(EN\\): ~~R\\$ 84,00~~ → *R\\$ {84.0*(1-PROMO_DISCOUNT_PCT/100):.2f}*",
+        parse_mode="MarkdownV2",
+        reply_markup=keyboard,
+    )
+
+
 async def cmd_amazon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Exibe a estratégia de vendas na Amazon com links para cada livro."""
     buttons = []
@@ -286,61 +343,65 @@ async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     book = BOOKS[book_id]
+    count = purchase_counts.get(book_id, 0)
     price_display = f"R\\$ {book['price']:.2f}"
     if book_id == "omf_en":
         price_display = f"R\\$ {book['price']:.2f} \\($14\\.00 USD\\)"
 
-    pay_row = [InlineKeyboardButton(f"💳 Pagar {price_display}", callback_data=f"comprar|{book_id}")]
+    # Verifica se há promoção ativa
+    promo_line = ""
+    if PROMO_ACTIVE and _time.time() < PROMO_END_TIME:
+        discounted = book["price"] * (1 - PROMO_DISCOUNT_PCT / 100)
+        remaining = int(PROMO_END_TIME - _time.time())
+        mins = remaining // 60
+        secs = remaining % 60
+        promo_line = (
+            f"\n\n🔥 *PROMOÇÃO ATIVA\\!* De ~~{price_display}~~ por "
+            f"*R\\$ {discounted:.2f}* \\— faltam *{mins:02d}:{secs:02d}*"
+        )
+        callback_buy = f"comprar_promo|{book_id}"
+    else:
+        callback_buy = f"comprar|{book_id}"
+
+    pay_row = [InlineKeyboardButton(f"💳 Pagar {price_display}", callback_data=callback_buy)]
     amazon_url = book.get("amazon_url", "")
     rows = [pay_row]
     if amazon_url:
         rows.append([InlineKeyboardButton("🛒 Ver na Amazon", url=amazon_url)])
 
+    # Prova social + escassez emocional
+    social_proof = (
+        f"👥 *{count} leitores* já adquiriram este livro\\!\n"
+        "📈 _Avaliação média: ⭐⭐⭐⭐⭐_\n\n"
+    )
+
     await query.message.reply_text(
         f"📖 Você selecionou: *{book['title']}*\n\n"
-        f"Preço: {price_display}\n\n"
-        "Clique no botão abaixo para prosseguir com o pagamento\\.",
+        f"{social_proof}"
+        f"💰 Preço: {price_display}{promo_line}\n\n"
+        "Clique abaixo para garantir o seu exemplar agora\\!",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
-async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gera o link de pagamento do Mercado Pago Checkout Pro."""
-    query = update.callback_query
-    await query.answer()
-
-    data_parts = query.data.split("|", 1)
-    if len(data_parts) < 2:
-        return
-
-    book_id = data_parts[1]
-    if book_id not in BOOKS:
-        await query.message.reply_text("❌ Livro não encontrado.")
-        return
-
-    book = BOOKS[book_id]
-    chat_id = query.message.chat_id
+def _build_preference(book: dict, book_id: str, chat_id: int, unit_price: float) -> tuple[str, str]:
+    """Cria uma preferência no Mercado Pago e retorna (external_ref, checkout_url)."""
     external_ref = f"{book_id}-{chat_id}-{uuid.uuid4().hex[:8]}"
-
-    # Armazena a referência para vincular o pagamento ao chat e livro
     pending_payments[external_ref] = (chat_id, book_id)
 
-    # Monta a preferência de pagamento
     preference_data = {
         "items": [
             {
                 "title": book["title"],
                 "quantity": 1,
-                "unit_price": book["price"],
+                "unit_price": round(unit_price, 2),
                 "currency_id": book["currency"],
                 "description": book["description"],
             }
         ],
         "external_reference": external_ref,
-        "payment_methods": {
-            "installments": 3,
-        },
+        "payment_methods": {"installments": 3},
         "back_urls": {
             "success": "https://t.me/Rviannavbot",
             "failure": "https://t.me/Rviannavbot",
@@ -349,55 +410,92 @@ async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "auto_return": "approved",
         "statement_descriptor": book["title"][:20].upper(),
     }
-
-    # Adiciona notification_url se WEBHOOK_BASE_URL estiver configurada
     if WEBHOOK_BASE_URL:
         preference_data["notification_url"] = f"{WEBHOOK_BASE_URL}/webhook"
 
-    try:
-        preference_response = mp_sdk.preference().create(preference_data)
-        preference = preference_response.get("response", {})
-        checkout_url = preference.get("init_point", "")
+    resp = mp_sdk.preference().create(preference_data)
+    checkout_url = resp.get("response", {}).get("init_point", "")
+    return external_ref, checkout_url
 
+
+async def _send_payment_link(
+    query,
+    book: dict,
+    book_id: str,
+    unit_price: float,
+    price_label: str,
+) -> None:
+    """Gera o link de pagamento e envia ao usuário."""
+    chat_id = query.message.chat_id
+    try:
+        external_ref, checkout_url = _build_preference(book, book_id, chat_id, unit_price)
         if not checkout_url:
-            logger.error("Falha ao criar preferência: %s", preference_response)
             await query.message.reply_text(
-                "❌ Ocorreu um erro ao gerar o link de pagamento\\. "
-                "Tente novamente mais tarde\\.",
+                "❌ Erro ao gerar o link de pagamento\\. Tente novamente mais tarde\\.",
                 parse_mode="MarkdownV2",
             )
             return
-
-        logger.info(
-            "Preferência criada — ID: %s | Ref: %s | Livro: %s | Chat: %s",
-            preference.get("id"),
-            external_ref,
-            book_id,
-            chat_id,
-        )
-
-        price_display = f"R\\$ {book['price']:.2f}"
-        if book_id == "omf_en":
-            price_display = f"R\\$ {book['price']:.2f}"
-
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton(f"💳 Pagar {price_display}", url=checkout_url)],
-                [InlineKeyboardButton("🔄 Já paguei — verificar", callback_data=f"verificar|{external_ref}")],
-            ]
-        )
+        logger.info("Preferência criada — Ref: %s | Livro: %s | Chat: %s", external_ref, book_id, chat_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"💳 Pagar {price_label}", url=checkout_url)],
+            [InlineKeyboardButton("🔄 Já paguei — verificar", callback_data=f"verificar|{external_ref}")],
+        ])
         await query.message.reply_text(
             PAYMENT_GENERATED_TEXT,
             parse_mode="MarkdownV2",
             reply_markup=keyboard,
         )
-
-    except Exception as exc:
+    except Exception:
         logger.exception("Erro ao criar preferência de pagamento")
         await query.message.reply_text(
             "❌ Erro inesperado ao processar sua compra\\. Tente novamente\\.",
             parse_mode="MarkdownV2",
         )
+
+
+async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gera o link de pagamento ao preço normal."""
+    query = update.callback_query
+    await query.answer()
+    data_parts = query.data.split("|", 1)
+    if len(data_parts) < 2:
+        return
+    book_id = data_parts[1]
+    if book_id not in BOOKS:
+        await query.message.reply_text("❌ Livro não encontrado.")
+        return
+    book = BOOKS[book_id]
+    price_label = f"R\\$ {book['price']:.2f}"
+    await _send_payment_link(query, book, book_id, book["price"], price_label)
+
+
+async def callback_comprar_promo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gera o link de pagamento com desconto promocional."""
+    query = update.callback_query
+    await query.answer()
+    data_parts = query.data.split("|", 1)
+    if len(data_parts) < 2:
+        return
+    book_id = data_parts[1]
+    if book_id not in BOOKS:
+        await query.message.reply_text("❌ Livro não encontrado.")
+        return
+
+    if not PROMO_ACTIVE or _time.time() >= PROMO_END_TIME:
+        # Promoção expirou — cobra preço normal
+        book = BOOKS[book_id]
+        price_label = f"R\\$ {book['price']:.2f}"
+        await query.message.reply_text(
+            "⏰ A promoção expirou\\. Gerando link com preço normal\\.",
+            parse_mode="MarkdownV2",
+        )
+        await _send_payment_link(query, book, book_id, book["price"], price_label)
+        return
+
+    book = BOOKS[book_id]
+    discounted = book["price"] * (1 - PROMO_DISCOUNT_PCT / 100)
+    price_label = f"R\\$ {discounted:.2f} \\(🔥 {PROMO_DISCOUNT_PCT}% OFF\\)"
+    await _send_payment_link(query, book, book_id, discounted, price_label)
 
 
 async def callback_verificar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -440,11 +538,29 @@ async def callback_verificar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+def _upsell_message(book_id: str) -> str:
+    """Retorna uma mensagem de upsell para os outros livros da coleção."""
+    other_books = [
+        (bid, b) for bid, b in BOOKS.items() if bid != book_id
+    ]
+    if not other_books:
+        return ""
+    lines = ["📚 *Complete sua coleção e aprofunde sua jornada:*\n"]
+    for bid, b in other_books:
+        price_str = f"R\\$ {b['price']:.2f}"
+        lines.append(f"🔹 {b['emoji']} *{b['title']}* — {price_str}")
+    lines.append("\n_Digite /start para adquirir outro título com desconto especial\\!_")
+    return "\n".join(lines)
+
+
 async def send_book(chat_id: int, book_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia o PDF do livro para o comprador."""
+    """Envia o PDF do livro para o comprador e incrementa o contador de vendas."""
     if book_id not in BOOKS:
         logger.error("Livro não encontrado: %s", book_id)
         return
+
+    # Incrementa prova social
+    purchase_counts[book_id] = purchase_counts.get(book_id, 0) + 1
 
     book = BOOKS[book_id]
     pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
@@ -463,13 +579,23 @@ async def send_book(chat_id: int, book_id: str, context: ContextTypes.DEFAULT_TY
                 filename=f"{book['title']}.pdf",
                 caption=f"📖 {book['title']} — Seu exemplar digital",
             )
+
+        # Gatilho de reciprocidade: upsell dos outros livros
+        upsell = _upsell_message(book_id)
+        if upsell:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=upsell,
+                parse_mode="MarkdownV2",
+            )
+
         logger.info("Livro %s enviado com sucesso para chat_id=%s", book_id, chat_id)
     except FileNotFoundError:
         logger.error("Arquivo PDF não encontrado: %s", pdf_path)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"❌ Desculpe, houve um erro ao enviar o livro. "
-                 f"Por favor, entre em contato com o suporte.",
+            text="❌ Desculpe, houve um erro ao enviar o livro. "
+                 "Por favor, entre em contato com o suporte.",
         )
     except Exception as exc:
         logger.exception("Erro ao enviar o livro para chat_id=%s", chat_id)
@@ -489,6 +615,7 @@ async def send_book_via_app(chat_id: int, book_id: str) -> None:
     pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
 
     try:
+        purchase_counts[book_id] = purchase_counts.get(book_id, 0) + 1
         bot = telegram_app.bot
         payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
         with open(pdf_path, "rb") as pdf_file:
@@ -503,6 +630,11 @@ async def send_book_via_app(chat_id: int, book_id: str) -> None:
                 filename=f"{book['title']}.pdf",
                 caption=f"📖 {book['title']} — Seu exemplar digital",
             )
+
+        upsell = _upsell_message(book_id)
+        if upsell:
+            await bot.send_message(chat_id=chat_id, text=upsell, parse_mode="MarkdownV2")
+
         logger.info("Livro %s enviado via webhook para chat_id=%s", book_id, chat_id)
     except FileNotFoundError:
         logger.error("Arquivo PDF não encontrado: %s", pdf_path)
@@ -522,6 +654,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("select_book|"):
         await callback_select_book(update, context)
+    elif data.startswith("comprar_promo|"):
+        await callback_comprar_promo(update, context)
     elif data.startswith("comprar|"):
         await callback_comprar(update, context)
     elif data.startswith("verificar|"):
@@ -675,6 +809,7 @@ def main():
     # Registra os handlers
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("grupos", cmd_grupos))
+    telegram_app.add_handler(CommandHandler("promo", cmd_promo))
     telegram_app.add_handler(CommandHandler("amazon", cmd_amazon))
     telegram_app.add_handler(CallbackQueryHandler(callback_router))
 
