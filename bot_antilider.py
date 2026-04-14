@@ -47,11 +47,22 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 MERCADOPAGO_ACCESS_TOKEN = os.environ["MERCADOPAGO_ACCESS_TOKEN"]
 
 # URLs da Amazon (configuráveis via variáveis de ambiente)
-# Defina AMAZON_URL_ANTILIDER, AMAZON_URL_OMF_PT e AMAZON_URL_OMF_EN no ambiente
-# para ativar os botões "Ver na Amazon" e o comando /amazon
 AMAZON_URL_ANTILIDER = os.environ.get("AMAZON_URL_ANTILIDER", "")
 AMAZON_URL_OMF_PT    = os.environ.get("AMAZON_URL_OMF_PT", "")
 AMAZON_URL_OMF_EN    = os.environ.get("AMAZON_URL_OMF_EN", "")
+
+# file_ids do Telegram para cada PDF (configurados via /getfileid)
+# Quando definidos, o bot envia o arquivo pelo Telegram sem precisar do PDF no servidor.
+# Configure as variáveis de ambiente BOOK_FILE_ID_ANTILIDER, BOOK_FILE_ID_OMF_PT e
+# BOOK_FILE_ID_OMF_EN no Railway após rodar /getfileid.
+BOOK_FILE_IDS: dict[str, str] = {
+    "antilider": os.environ.get("BOOK_FILE_ID_ANTILIDER", ""),
+    "omf_pt":    os.environ.get("BOOK_FILE_ID_OMF_PT", ""),
+    "omf_en":    os.environ.get("BOOK_FILE_ID_OMF_EN", ""),
+}
+
+# ID do chat do administrador (para comandos restritos como /getfileid)
+ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
 
 # Catálogo de livros
 BOOKS = {
@@ -257,6 +268,65 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Exibe a lista de grupos públicos."""
     await update.message.reply_text(GROUPS_TEXT, parse_mode="MarkdownV2", disable_web_page_preview=True)
+
+
+async def cmd_getfileid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Comando admin: envia cada PDF para o Telegram e retorna os file_ids.
+    Use os file_ids para configurar as variáveis de ambiente no Railway.
+    """
+    chat_id = update.effective_chat.id
+    if ADMIN_CHAT_ID and chat_id != ADMIN_CHAT_ID:
+        return  # silenciosamente ignora não-admins
+
+    await update.message.reply_text(
+        "⏳ Enviando PDFs para o Telegram e capturando file\\_ids\\.\\.\\.",
+        parse_mode="MarkdownV2",
+    )
+
+    lines = ["📋 *file\\_ids dos livros* — cole no Railway como variáveis de ambiente:\n"]
+    for book_id, book in BOOKS.items():
+        # Verifica se já tem file_id configurado
+        existing = BOOK_FILE_IDS.get(book_id, "")
+        if existing:
+            lines.append(
+                f"✅ *{book['title']}*\n"
+                f"`BOOK_FILE_ID_{book_id.upper()}` já configurado\\."
+            )
+            continue
+
+        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
+        if not os.path.isfile(pdf_path):
+            lines.append(
+                f"❌ *{book['title']}*\n"
+                f"Arquivo `{book['pdf_filename']}` não encontrado no servidor\\."
+            )
+            continue
+
+        try:
+            with open(pdf_path, "rb") as f:
+                msg = await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename=book["pdf_filename"],
+                    caption=f"[upload interno] {book['title']}",
+                )
+            file_id = msg.document.file_id
+            env_key = f"BOOK_FILE_ID_{book_id.upper()}"
+            lines.append(
+                f"📖 *{book['title']}*\n"
+                f"`{env_key}` \\= `{file_id}`"
+            )
+        except Exception:
+            logger.exception("Erro ao fazer upload do PDF %s", book_id)
+            lines.append(f"❌ *{book['title']}* — erro no upload\\.")
+
+    lines.append(
+        "\n⚙️ _Copie cada valor acima e adicione em Railway → seu projeto → Variables\\._"
+    )
+    await update.message.reply_text(
+        "\n\n".join(lines),
+        parse_mode="MarkdownV2",
+    )
 
 
 async def cmd_promo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -553,51 +623,54 @@ def _upsell_message(book_id: str) -> str:
     return "\n".join(lines)
 
 
-async def send_book(chat_id: int, book_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia o PDF do livro para o comprador e incrementa o contador de vendas."""
-    if book_id not in BOOKS:
-        logger.error("Livro não encontrado: %s", book_id)
-        return
-
-    # Incrementa prova social
-    purchase_counts[book_id] = purchase_counts.get(book_id, 0) + 1
-
+async def _deliver_book(bot, chat_id: int, book_id: str) -> None:
+    """Envia o PDF ao comprador via file_id (preferencial) ou arquivo local."""
     book = BOOKS[book_id]
-    pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
+    payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
+    await bot.send_message(chat_id=chat_id, text=payment_text, parse_mode="MarkdownV2")
 
-    try:
+    file_id = BOOK_FILE_IDS.get(book_id, "")
+    if file_id:
+        # Entrega rápida via file_id do Telegram (sem precisar do PDF no servidor)
+        await bot.send_document(
+            chat_id=chat_id,
+            document=file_id,
+            caption=f"📖 {book['title']} — Seu exemplar digital",
+        )
+    else:
+        # Fallback: lê o arquivo do disco
+        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
         with open(pdf_path, "rb") as pdf_file:
-            payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=payment_text,
-                parse_mode="MarkdownV2",
-            )
-            await context.bot.send_document(
+            await bot.send_document(
                 chat_id=chat_id,
                 document=pdf_file,
                 filename=f"{book['title']}.pdf",
                 caption=f"📖 {book['title']} — Seu exemplar digital",
             )
 
-        # Gatilho de reciprocidade: upsell dos outros livros
-        upsell = _upsell_message(book_id)
-        if upsell:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=upsell,
-                parse_mode="MarkdownV2",
-            )
+    upsell = _upsell_message(book_id)
+    if upsell:
+        await bot.send_message(chat_id=chat_id, text=upsell, parse_mode="MarkdownV2")
 
+
+async def send_book(chat_id: int, book_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Envia o PDF do livro para o comprador e incrementa o contador de vendas."""
+    if book_id not in BOOKS:
+        logger.error("Livro não encontrado: %s", book_id)
+        return
+
+    purchase_counts[book_id] = purchase_counts.get(book_id, 0) + 1
+
+    try:
+        await _deliver_book(context.bot, chat_id, book_id)
         logger.info("Livro %s enviado com sucesso para chat_id=%s", book_id, chat_id)
     except FileNotFoundError:
-        logger.error("Arquivo PDF não encontrado: %s", pdf_path)
+        logger.error("PDF não encontrado para %s", book_id)
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ Desculpe, houve um erro ao enviar o livro. "
-                 "Por favor, entre em contato com o suporte.",
+            text="❌ Erro ao enviar o livro. Entre em contato com o suporte.",
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Erro ao enviar o livro para chat_id=%s", chat_id)
 
 
@@ -616,28 +689,10 @@ async def send_book_via_app(chat_id: int, book_id: str) -> None:
 
     try:
         purchase_counts[book_id] = purchase_counts.get(book_id, 0) + 1
-        bot = telegram_app.bot
-        payment_text = PAYMENT_APPROVED_TEXT_TEMPLATE.format(book_title=book["title"])
-        with open(pdf_path, "rb") as pdf_file:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=payment_text,
-                parse_mode="MarkdownV2",
-            )
-            await bot.send_document(
-                chat_id=chat_id,
-                document=pdf_file,
-                filename=f"{book['title']}.pdf",
-                caption=f"📖 {book['title']} — Seu exemplar digital",
-            )
-
-        upsell = _upsell_message(book_id)
-        if upsell:
-            await bot.send_message(chat_id=chat_id, text=upsell, parse_mode="MarkdownV2")
-
+        await _deliver_book(telegram_app.bot, chat_id, book_id)
         logger.info("Livro %s enviado via webhook para chat_id=%s", book_id, chat_id)
     except FileNotFoundError:
-        logger.error("Arquivo PDF não encontrado: %s", pdf_path)
+        logger.error("PDF não encontrado para %s", book_id)
     except Exception as exc:
         logger.exception("Erro ao enviar livro via webhook para chat_id=%s", chat_id)
 
@@ -811,6 +866,7 @@ def main():
     telegram_app.add_handler(CommandHandler("grupos", cmd_grupos))
     telegram_app.add_handler(CommandHandler("promo", cmd_promo))
     telegram_app.add_handler(CommandHandler("amazon", cmd_amazon))
+    telegram_app.add_handler(CommandHandler("getfileid", cmd_getfileid))
     telegram_app.add_handler(CallbackQueryHandler(callback_router))
 
     # Inicia o polling
