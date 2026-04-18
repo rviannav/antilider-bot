@@ -1,0 +1,12 @@
+# PDFs — não versionar em repositório público (use /getfileid para gerar file_ids)
+*.pdf
+
+# Logs
+*.log
+bot.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
