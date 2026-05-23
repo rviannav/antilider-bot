@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================
-  BOT DE VENDAS — MÚLTIPLOS LIVROS
-  Telegram + Mercado Pago Checkout Pro
+  BOT DE VENDAS — MÚLTIPLOS LIVROS & HOTMART
+  Telegram + Mercado Pago Checkout Pro + Hotmart Links
 =============================================================
 
 Funcionalidades:
-  • /start  → Menu com seleção de livros disponíveis
-  • /grupos → Lista de grupos públicos sobre liderança
+  • /start    → Menu com seleção de livros (Mercado Pago) e produtos Hotmart
+  • /divulgar → Mensagens prontas (PT/EN) para divulgação
+  • /grupos   → Lista de grupos públicos sobre liderança e negócios
   • Geração de link de pagamento via Checkout Pro
   • Webhook para confirmação de pagamento
   • Envio automático do PDF após pagamento aprovado
@@ -46,7 +47,7 @@ from urllib.parse import urlparse, parse_qs
 TELEGRAM_TOKEN = "8738278665:AAHlFTsZfaVMqDPyLByiNB_EG6EBIhGD20Q"
 MERCADOPAGO_ACCESS_TOKEN = "APP_USR-4583982947872694-040719-2434778fb7385091dd755d15f4f67106-3322210976"
 
-# Catálogo de livros
+# Catálogo de livros (Mercado Pago / Entrega Automática)
 BOOKS = {
     "antilider": {
         "title": "Anti-Líder",
@@ -61,7 +62,7 @@ BOOKS = {
         "title": "OMF (Over a Why Me?)",
         "price": 32.00,
         "currency": "BRL",
-        "description": "E-book OMF — Descobra seu propósito",
+        "description": "E-book OMF — Descubra seu propósito",
         "pdf_filename": "omf.pdf",
         "emoji": "🌟",
         "subtitle": "Português",
@@ -77,11 +78,32 @@ BOOKS = {
     },
 }
 
+# Produtos Hotmart
+HOTMART_PRODUCTS = [
+    {
+        "title": "Anti-Líder",
+        "url": "https://go.hotmart.com/S105107590Q",
+        "emoji": "📘"
+    },
+    {
+        "title": "Achieve Stability in Container Terminals",
+        "url": "https://rviannav.hotmart.host/achieve-stability-and-increase-productivity-in-container-terminals-25bfecf2-b413-446b-ba7a-b3e895248aed",
+        "emoji": "⚓"
+    },
+    {
+        "title": "OMF - Estrutura da Maturidade Operacional (PT)",
+        "url": "https://go.hotmart.com/Y105182407G",
+        "emoji": "⚙️"
+    },
+    {
+        "title": "OMF - Operational Maturity Framework (EN)",
+        "url": "https://go.hotmart.com/S104955580K",
+        "emoji": "🌐"
+    }
+]
+
 # Porta do servidor webhook para receber notificações do Mercado Pago
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", 8443))
-
-# URL pública do webhook (deve ser configurada com seu domínio/IP público)
-# Exemplo: https://seudominio.com:8443/webhook
 WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL", "")
 
 # ─────────────────────────────────────────────
@@ -102,13 +124,9 @@ mp_sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 # ─────────────────────────────────────────────
 # ARMAZENAMENTO EM MEMÓRIA
-# Mapeia external_reference → (chat_id, book_id)
-# Em produção, use um banco de dados.
 # ─────────────────────────────────────────────
 
 pending_payments: dict[str, tuple[int, str]] = {}
-
-# Referência global ao Application do Telegram (preenchida em main)
 telegram_app: Application | None = None
 
 # ─────────────────────────────────────────────
@@ -117,11 +135,14 @@ telegram_app: Application | None = None
 
 WELCOME_TEXT = (
     "📚 *Bem\\-vindo à nossa livraria digital\\!*\n\n"
-    "Escolha um dos nossos livros disponíveis abaixo:\n\n"
-    "🔹 *Anti\\-Líder* — Transforme sua visão sobre liderança \\(Português\\)\n"
-    "🔹 *OMF \\(Over a Why Me\\?\\)* — Descobra seu propósito \\(Português\\)\n"
-    "🔹 *OMF — Over Frame Maturity Framework* — English \\($14\\.00 USD / R\\$ 84,00\\)\n\n"
-    "Clique em um dos botões abaixo para começar\\!"
+    "Temos duas opções de compra disponíveis para você:\n\n"
+    "📦 *1\\. Entrega Automática via Telegram \\(Mercado Pago\\)*\n"
+    "Os livros abaixo são enviados em PDF diretamente aqui no chat logo após o pagamento:\n\n"
+)
+
+HOTMART_TEXT = (
+    "\n\n🔗 *2\\. Produtos na Hotmart*\n"
+    "Compre pela plataforma Hotmart e tenha acesso à área de membros exclusiva:\n"
 )
 
 PAYMENT_GENERATED_TEXT = (
@@ -151,8 +172,25 @@ GROUPS_TEXT = (
     "6\\. [Startups Brasil](https://t.me/startupsbrasil)\n"
     "7\\. [Líderes do Futuro](https://t.me/lideresdofuturobr)\n"
     "8\\. [Negócios e Finanças](https://t.me/negociosefinancas)\n\n"
-    "💡 _Dica: compartilhe o link @Rviannavbot nos grupos "
-    "para que mais pessoas conheçam nossos livros\\!_"
+    "💡 _Dica: use o comando /divulgar para obter mensagens prontas para compartilhar nestes grupos\\!_"
+)
+
+DIVULGAR_TEXT = (
+    "📢 *Sistema de Divulgação*\n\n"
+    "Copie as mensagens abaixo e compartilhe em grupos de liderança, negócios ou gestão de terminais para ajudar a divulgar nossos produtos\\!\n\n"
+    "🇧🇷 *Mensagem em Português:*\n"
+    "```text\n"
+    "🚀 Você quer transformar sua visão sobre liderança e melhorar a produtividade da sua equipe? Conheça o livro \"Anti-Líder\" e a metodologia OMF (Operational Maturity Framework)!\n\n"
+    "📚 Adquira os e-books com entrega automática no Telegram ou acesse a versão completa na Hotmart.\n\n"
+    "👉 Fale com o bot oficial para conhecer os produtos: @Rviannavbot\n"
+    "```\n\n"
+    "🇺🇸 *Mensagem em Inglês (English Message):*\n"
+    "```text\n"
+    "🚀 Do you want to transform your leadership vision and improve team productivity? Discover the \"Anti-Leader\" book and the OMF (Operational Maturity Framework) methodology!\n\n"
+    "📚 Get the e-books with automatic delivery on Telegram or access the full version on Hotmart.\n\n"
+    "👉 Talk to the official bot to check out the products: @Rviannavbot\n"
+    "```\n\n"
+    "Dica: Envie essas mensagens nos grupos listados no comando /grupos\\!"
 )
 
 # ─────────────────────────────────────────────
@@ -162,30 +200,42 @@ GROUPS_TEXT = (
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Apresenta o menu de livros disponíveis."""
-    keyboard = InlineKeyboardMarkup(
+    keyboard_buttons = [
         [
-            [
-                InlineKeyboardButton(
-                    f"{BOOKS['antilider']['emoji']} Anti-Líder — R$ 32,00",
-                    callback_data="select_book|antilider",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{BOOKS['omf_pt']['emoji']} OMF (Português) — R$ 32,00",
-                    callback_data="select_book|omf_pt",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{BOOKS['omf_en']['emoji']} OMF (English) — R$ 84,00",
-                    callback_data="select_book|omf_en",
-                ),
-            ],
-        ]
-    )
+            InlineKeyboardButton(
+                f"{BOOKS['antilider']['emoji']} Anti-Líder — R$ 32,00",
+                callback_data="select_book|antilider",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{BOOKS['omf_pt']['emoji']} OMF (Português) — R$ 32,00",
+                callback_data="select_book|omf_pt",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{BOOKS['omf_en']['emoji']} OMF (English) — R$ 84,00",
+                callback_data="select_book|omf_en",
+            ),
+        ],
+    ]
+    
+    # Adiciona os botões da Hotmart
+    for product in HOTMART_PRODUCTS:
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                f"{product['emoji']} Hotmart: {product['title']}",
+                url=product['url']
+            )
+        ])
+
+    keyboard = InlineKeyboardMarkup(keyboard_buttons)
+    
+    full_text = WELCOME_TEXT + HOTMART_TEXT
+    
     await update.message.reply_text(
-        WELCOME_TEXT,
+        full_text,
         parse_mode="MarkdownV2",
         reply_markup=keyboard,
     )
@@ -196,8 +246,13 @@ async def cmd_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(GROUPS_TEXT, parse_mode="MarkdownV2", disable_web_page_preview=True)
 
 
+async def cmd_divulgar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Exibe as mensagens prontas para divulgação."""
+    await update.message.reply_text(DIVULGAR_TEXT, parse_mode="MarkdownV2")
+
+
 async def callback_select_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usuário seleciona um livro."""
+    """Usuário seleciona um livro com entrega automática."""
     query = update.callback_query
     await query.answer()
 
@@ -271,7 +326,6 @@ async def callback_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "statement_descriptor": book["title"][:20].upper(),
     }
 
-    # Adiciona notification_url se WEBHOOK_BASE_URL estiver configurada
     if WEBHOOK_BASE_URL:
         preference_data["notification_url"] = f"{WEBHOOK_BASE_URL}/webhook"
 
@@ -334,7 +388,6 @@ async def callback_verificar(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = query.message.chat_id
 
     try:
-        # Busca pagamentos pela referência externa
         filters = {"external_reference": external_ref}
         search_response = mp_sdk.payment().search(filters)
         results = search_response.get("response", {}).get("results", [])
@@ -473,18 +526,15 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
 
             logger.info("Webhook recebido: %s", json.dumps(data, indent=2))
 
-            # Responde imediatamente ao Mercado Pago
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode())
 
-            # Processa a notificação em background
             action = data.get("action", "")
             topic = data.get("topic", "")
             data_id = data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None
 
-            # Também verifica query string (IPN usa ?topic=payment&id=xxx)
             parsed = urlparse(self.path)
             qs = parse_qs(parsed.query)
             if not data_id and "id" in qs:
@@ -505,7 +555,6 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
         """Verifica o pagamento e envia o livro se aprovado."""
         try:
             if topic == "merchant_order":
-                # Busca a merchant_order para obter os pagamentos
                 order_response = mp_sdk.merchant_order().get(resource_id)
                 order = order_response.get("response", {})
                 payments = order.get("payments", [])
@@ -513,7 +562,6 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
 
                 approved = any(p.get("status") == "approved" for p in payments)
             else:
-                # Busca o pagamento diretamente
                 payment_response = mp_sdk.payment().get(resource_id)
                 payment = payment_response.get("response", {})
                 status = payment.get("status", "")
@@ -528,7 +576,6 @@ class MercadoPagoWebhookHandler(BaseHTTPRequestHandler):
                     book_id,
                     chat_id,
                 )
-                # Envia o livro de forma assíncrona
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(send_book_via_app(chat_id, book_id))
@@ -559,10 +606,9 @@ def main():
     global telegram_app
 
     logger.info("=" * 50)
-    logger.info("  BOT MULTI-LIVROS — Iniciando...")
+    logger.info("  BOT MULTI-LIVROS & HOTMART — Iniciando...")
     logger.info("=" * 50)
 
-    # Verifica se todos os PDFs existem
     for book_id, book in BOOKS.items():
         pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), book["pdf_filename"])
         if not Path(pdf_path).is_file():
@@ -574,7 +620,6 @@ def main():
     for book_id, book in BOOKS.items():
         logger.info("   • %s (%s) — R$ %.2f", book["title"], book["pdf_filename"], book["price"])
 
-    # Inicia o servidor webhook em uma thread separada
     if WEBHOOK_BASE_URL:
         logger.info("Webhook configurado: %s/webhook", WEBHOOK_BASE_URL)
     else:
@@ -586,19 +631,17 @@ def main():
     webhook_thread = Thread(target=start_webhook_server, daemon=True)
     webhook_thread.start()
 
-    # Cria a aplicação do Telegram
     telegram_app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
         .build()
     )
 
-    # Registra os handlers
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CommandHandler("grupos", cmd_grupos))
+    telegram_app.add_handler(CommandHandler("divulgar", cmd_divulgar))
     telegram_app.add_handler(CallbackQueryHandler(callback_router))
 
-    # Inicia o polling
     logger.info("Bot rodando via polling. Pressione Ctrl+C para parar.")
     telegram_app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
